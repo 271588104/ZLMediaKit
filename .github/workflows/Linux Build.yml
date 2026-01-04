@@ -1,0 +1,105 @@
+name: Linux Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 submodule 源码
+        run: |
+          mv -f .gitmodules_github .gitmodules
+          git submodule sync
+          git submodule update --init
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libssl-dev libsrtp2-dev
+
+      - name: 下载 usrsctp
+        uses: actions/checkout@v4
+        with:
+          repository: sctplab/usrsctp
+          fetch-depth: 1
+          ref: 0.9.5.0
+          path: 3rdpart/usrsctp
+
+      - name: 编译 usrsctp
+        run: |
+          cd 3rdpart/usrsctp
+          mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -DCMAKE_POSITION_INDEPENDENT_CODE=ON ..
+          make -j$(nproc)
+          sudo make install
+
+      - name: 编译项目
+        run: |
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DENABLE_WEBRTC=ON \
+            -DENABLE_SRT=ON \
+            -DENABLE_OPENSSL=ON \
+            -DENABLE_API=ON \
+            -DENABLE_SERVER=ON \
+            -DENABLE_PLAYER=OFF \
+            -DENABLE_TESTS=OFF
+          make -j$(nproc)
+
+      - name: 整理产物
+        run: |
+          mkdir -p dist
+
+          # 查找实际输出目录
+          RELEASE_DIR=$(dirname $(find release -name "MediaServer" -type f | head -1))
+          echo "找到输出目录: $RELEASE_DIR"
+
+          # 只复制需要的文件
+          cp "$RELEASE_DIR/MediaServer" dist/
+          cp "$RELEASE_DIR/libmk_api.so" dist/ 2>/dev/null || true
+          cp "$RELEASE_DIR/config.ini" dist/ 2>/dev/null || true
+          cp "$RELEASE_DIR/default.pem" dist/ 2>/dev/null || true
+
+          # 复制 www 目录
+          if [ -d "$RELEASE_DIR/www" ]; then
+            cp -r "$RELEASE_DIR/www" dist/
+          fi
+
+          # 创建启动脚本
+          cat > dist/start.sh << 'EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+./MediaServer -c config.ini
+EOF
+          chmod +x dist/start.sh
+          chmod +x dist/MediaServer
+
+          echo "=== 打包内容 ==="
+          ls -la dist/
+
+      - name: 设置环境变量
+        run: |
+          echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaKit_Linux_${{ github.event.inputs.build_type }}_${{ env.DATE }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 90
