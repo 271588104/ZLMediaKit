@@ -83,7 +83,7 @@ jobs:
             cd /root
 
             # 编译 ZLMediaKit
-            mkdir -p build && cd build
+            rm -rf build && mkdir -p build && cd build
             cmake .. \
               -DOPENSSL_ROOT_DIR=/root/install \
               -DOPENSSL_USE_STATIC_LIBS=ON \
