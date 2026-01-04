@@ -1,99 +1,98 @@
+name: My Windows Build
 
-● name: My Windows Build
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '构建类型'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
 
-  on:
-    workflow_dispatch:
-      inputs:
-        build_type:
-          description: '构建类型'
-          required: true
-          default: 'Release'
-          type: choice
-          options:
-            - Release
-            - Debug
+jobs:
+  build:
+    runs-on: windows-2022
 
-  jobs:
-    build:
-      runs-on: windows-2022
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
 
-      steps:
-        - name: 检出代码
-          uses: actions/checkout@v4
+      - name: 下载 submodule 源码
+        run: |
+          mv -Force .gitmodules_github .gitmodules
+          git submodule sync
+          git submodule update --init
 
-        - name: 下载 submodule 源码
-          run: |
-            mv -Force .gitmodules_github .gitmodules
-            git submodule sync
-            git submodule update --init
+      - name: 配置 vcpkg
+        uses: lukka/run-vcpkg@v7
+        with:
+          vcpkgDirectory: '${{github.workspace}}/vcpkg'
+          vcpkgTriplet: x64-windows-static
+          vcpkgGitCommitId: 'efcfaaf60d7ec57a159fc3110403d939bfb69729'
+          vcpkgArguments: 'openssl libsrtp[openssl] usrsctp'
 
-        - name: 配置 vcpkg
-          uses: lukka/run-vcpkg@v7
-          with:
-            vcpkgDirectory: '${{github.workspace}}/vcpkg'
-            vcpkgTriplet: x64-windows-static
-            vcpkgGitCommitId: 'efcfaaf60d7ec57a159fc3110403d939bfb69729'
-            vcpkgArguments: 'openssl libsrtp[openssl] usrsctp'
+      - name: 编译项目
+        uses: lukka/run-cmake@v3
+        with:
+          useVcpkgToolchainFile: true
+          buildDirectory: '${{github.workspace}}/build'
+          cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=OFF -DENABLE_TESTS=OFF'
+          cmakeBuildType: ${{ github.event.inputs.build_type }}
 
-        - name: 编译项目
-          uses: lukka/run-cmake@v3
-          with:
-            useVcpkgToolchainFile: true
-            buildDirectory: '${{github.workspace}}/build'
-            cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=OFF -DENABLE_TESTS=OFF'
-            cmakeBuildType: ${{ github.event.inputs.build_type }}
+      - name: 打包便携版
+        run: |
+          New-Item -ItemType Directory -Force -Path portable
 
-        - name: 打包便携版
-          run: |
-            New-Item -ItemType Directory -Force -Path portable
+          Copy-Item -Path "release/MediaServer.exe" -Destination "portable/" -Force
+          Copy-Item -Path "release/mk_api.dll" -Destination "portable/" -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path "release/*.pdb" -Destination "portable/" -Force -ErrorAction SilentlyContinue
 
-            Copy-Item -Path "release/MediaServer.exe" -Destination "portable/" -Force
-            Copy-Item -Path "release/mk_api.dll" -Destination "portable/" -Force -ErrorAction SilentlyContinue
-            Copy-Item -Path "release/*.pdb" -Destination "portable/" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "conf") {
+            Copy-Item -Path "conf/*" -Destination "portable/" -Force
+          }
 
-            if (Test-Path "conf") {
-              Copy-Item -Path "conf/*" -Destination "portable/" -Force
-            }
+          if (Test-Path "www") {
+            Copy-Item -Path "www" -Destination "portable/" -Recurse -Force
+          }
 
-            if (Test-Path "www") {
-              Copy-Item -Path "www" -Destination "portable/" -Recurse -Force
-            }
+          @"
+@echo off
+cd /d "%~dp0"
+MediaServer.exe -c config.ini
+pause
+"@ | Out-File -FilePath "portable/启动服务.bat" -Encoding ASCII
 
-            @"
-  @echo off
-  cd /d "%~dp0"
-  MediaServer.exe -c config.ini
-  pause
-  "@ | Out-File -FilePath "portable/启动服务.bat" -Encoding ASCII
+          @"
+MediaKit 便携版
+===============
 
-            @"
-  MediaKit 便携版
-  ===============
+启动方式:
+  双击 启动服务.bat 或运行 MediaServer.exe -c config.ini
 
-  启动方式:
-    双击 启动服务.bat 或运行 MediaServer.exe -c config.ini
+默认端口:
+  RTSP: 554
+  RTMP: 1935
+  HTTP: 80
+  HTTPS: 443
 
-  默认端口:
-    RTSP: 554
-    RTMP: 1935
-    HTTP: 80
-    HTTPS: 443
+配置文件: config.ini
+"@ | Out-File -FilePath "portable/README.txt" -Encoding UTF8
 
-  配置文件: config.ini
-  "@ | Out-File -FilePath "portable/README.txt" -Encoding UTF8
+          Write-Host "=== 打包内容 ==="
+          Get-ChildItem -Path "portable/" | Format-Table Name, Length
 
-            Write-Host "=== 打包内容 ==="
-            Get-ChildItem -Path "portable/" | Format-Table Name, Length
+      - name: 设置环境变量
+        run: |
+          $dateString = Get-Date -Format "yyyy-MM-dd"
+          echo "DATE=$dateString" >> $env:GITHUB_ENV
 
-        - name: 设置环境变量
-          run: |
-            $dateString = Get-Date -Format "yyyy-MM-dd"
-            echo "DATE=$dateString" >> $env:GITHUB_ENV
-
-        - name: 上传便携版
-          uses: actions/upload-artifact@v4
-          with:
-            name: MediaKit_Portable_${{ github.event.inputs.build_type }}_${{ env.DATE }}
-            path: portable/*
-            if-no-files-found: error
-            retention-days: 90
+      - name: 上传便携版
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaKit_Portable_${{ github.event.inputs.build_type }}_${{ env.DATE }}
+          path: portable/*
+          if-no-files-found: error
+          retention-days: 90
