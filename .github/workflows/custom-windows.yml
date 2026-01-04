@@ -1,7 +1,6 @@
 
   name: My Windows Build
 
-  # 手动触发，sync fork 不会自动运行
   on:
     workflow_dispatch:
       inputs:
@@ -29,23 +28,20 @@
             git submodule update --init
 
         - name: 配置 vcpkg
-          uses: lukka/run-vcpkg@v11
+          uses: lukka/run-vcpkg@v7
           with:
             vcpkgDirectory: '${{github.workspace}}/vcpkg'
+            vcpkgTriplet: x64-windows-static
             vcpkgGitCommitId: 'efcfaaf60d7ec57a159fc3110403d939bfb69729'
-
-        - name: 安装依赖
-          run: |
-            cd vcpkg
-            ./vcpkg install openssl:x64-windows-static libsrtp[openssl]:x64-windows-static usrsctp:x64-windows-static
+            vcpkgArguments: 'openssl libsrtp[openssl] usrsctp'
 
         - name: 编译项目
-          uses: lukka/run-cmake@v10
+          uses: lukka/run-cmake@v3
           with:
-            configurePreset: 'ninja-multi-vcpkg'
-            configurePresetAdditionalArgs: "['-DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }}', '-DENABLE_WEBRTC=ON', '-DENABLE_SRT=ON', '-DENABLE_OPENSSL=ON', '-DENABLE_API=ON', '-DENABLE_SERVER=ON']"
-            buildPreset: 'ninja-multi-vcpkg'
-            buildPresetAdditionalArgs: "['--config', '${{ github.event.inputs.build_type }}']"
+            useVcpkgToolchainFile: true
+            buildDirectory: '${{github.workspace}}/build'
+            cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=ON'
+            cmakeBuildType: ${{ github.event.inputs.build_type }}
 
         - name: 设置环境变量
           run: |
@@ -56,7 +52,6 @@
           uses: actions/upload-artifact@v4
           with:
             name: ZLMediaKit_Windows_${{ github.event.inputs.build_type }}_${{ env.DATE }}
-            path: |
-              release/*
+            path: release/*
             if-no-files-found: warn
             retention-days: 90
