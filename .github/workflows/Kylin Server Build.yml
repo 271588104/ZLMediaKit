@@ -56,7 +56,7 @@ jobs:
           docker run -v $(pwd):/root -w /root --rm rockylinux:8 sh -c "
             set -x
 
-            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel
+            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel zlib-static
 
             mkdir -p /root/install
 
@@ -87,6 +87,8 @@ jobs:
             cmake .. \
               -DOPENSSL_ROOT_DIR=/root/install \
               -DOPENSSL_USE_STATIC_LIBS=ON \
+              -DZLIB_LIBRARY=/usr/lib64/libz.so \
+              -DZLIB_INCLUDE_DIR=/usr/include \
               -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
               -DENABLE_WEBRTC=ON \
               -DENABLE_SRT=ON \
