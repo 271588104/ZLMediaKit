@@ -56,7 +56,7 @@ jobs:
           docker run -v $(pwd):/root -w /root --rm rockylinux:8 sh -c "
             set -x
 
-            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel
+            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel
 
             mkdir -p /root/install
 
