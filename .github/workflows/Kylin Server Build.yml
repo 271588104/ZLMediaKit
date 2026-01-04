@@ -60,8 +60,8 @@ jobs:
             dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel perl
 
             # 验证安装
-            which gcc cmake make
             gcc --version
+            cmake --version
 
             mkdir -p /root/install
 
