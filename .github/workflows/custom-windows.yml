@@ -39,8 +39,35 @@ jobs:
         with:
           useVcpkgToolchainFile: true
           buildDirectory: '${{github.workspace}}/build'
-          cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=OFF -DENABLE_TESTS=OFF'
+          cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=OFF -DENABLE_TESTS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
           cmakeBuildType: ${{ github.event.inputs.build_type }}
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+
+          # 查找实际输出目录
+          $releaseDir = Get-ChildItem -Path "release" -Recurse -Filter "MediaServer.exe" | Select-Object -First 1 | Split-Path -Parent
+          Write-Host "找到输出目录: $releaseDir"
+
+          # 只复制需要的文件
+          Copy-Item -Path "$releaseDir/MediaServer.exe" -Destination "dist/" -Force
+          Copy-Item -Path "$releaseDir/mk_api.dll" -Destination "dist/" -Force
+          Copy-Item -Path "$releaseDir/config.ini" -Destination "dist/" -Force -ErrorAction SilentlyContinue
+
+          # 复制 www 目录
+          if (Test-Path "$releaseDir/www") {
+            Copy-Item -Path "$releaseDir/www" -Destination "dist/" -Recurse -Force
+          }
+
+          # 复制证书文件
+          if (Test-Path "$releaseDir/default.pem") {
+            Copy-Item -Path "$releaseDir/default.pem" -Destination "dist/" -Force
+          }
+
+          Write-Host "=== 打包内容 ==="
+          Get-ChildItem -Path "dist/" -Recurse | Format-Table Name, Length
 
       - name: 设置环境变量
         run: |
@@ -51,6 +78,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MediaKit_${{ github.event.inputs.build_type }}_${{ env.DATE }}
-          path: release/*
+          path: dist/*
           if-no-files-found: error
           retention-days: 90
