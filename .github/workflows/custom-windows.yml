@@ -42,43 +42,15 @@ jobs:
           cmakeAppendedArgs: '-DENABLE_WEBRTC=ON -DENABLE_SRT=ON -DENABLE_OPENSSL=ON -DENABLE_API=ON -DENABLE_SERVER=ON -DENABLE_PLAYER=OFF -DENABLE_TESTS=OFF'
           cmakeBuildType: ${{ github.event.inputs.build_type }}
 
-      - name: 打包便携版
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path portable
-
-          Copy-Item -Path "release/MediaServer.exe" -Destination "portable/" -Force
-          Copy-Item -Path "release/mk_api.dll" -Destination "portable/" -Force -ErrorAction SilentlyContinue
-          Copy-Item -Path "release/*.pdb" -Destination "portable/" -Force -ErrorAction SilentlyContinue
-
-          if (Test-Path "conf") {
-            Copy-Item -Path "conf/*" -Destination "portable/" -Force
-          }
-
-          if (Test-Path "www") {
-            Copy-Item -Path "www" -Destination "portable/" -Recurse -Force
-          }
-
-          # 创建启动脚本
-          $batContent = "@echo off`r`ncd /d `"%~dp0`"`r`nMediaServer.exe -c config.ini`r`npause"
-          [System.IO.File]::WriteAllText("portable/启动服务.bat", $batContent, [System.Text.Encoding]::ASCII)
-
-          # 创建说明文件
-          $readmeContent = "MediaKit 便携版`r`n===============`r`n`r`n启动方式:`r`n  双击 启动服务.bat 或运行 MediaServer.exe -c config.ini`r`n`r`n默认端口:`r`n  RTSP: 554`r`n  RTMP: 1935`r`n  HTTP: 80`r`n  HTTPS: 443`r`n`r`n配置文件: config.ini"
-          [System.IO.File]::WriteAllText("portable/README.txt", $readmeContent, [System.Text.Encoding]::UTF8)
-
-          Write-Host "=== 打包内容 ==="
-          Get-ChildItem -Path "portable/" | Format-Table Name, Length
-
       - name: 设置环境变量
         run: |
           $dateString = Get-Date -Format "yyyy-MM-dd"
           echo "DATE=$dateString" >> $env:GITHUB_ENV
 
-      - name: 上传便携版
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MediaKit_Portable_${{ github.event.inputs.build_type }}_${{ env.DATE }}
-          path: portable/*
+          name: MediaKit_${{ github.event.inputs.build_type }}_${{ env.DATE }}
+          path: release/*
           if-no-files-found: error
           retention-days: 90
