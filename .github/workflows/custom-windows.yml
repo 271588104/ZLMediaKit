@@ -1,4 +1,4 @@
-name: My Windows Build
+name: Windows Build
 
 on:
   workflow_dispatch:
@@ -43,6 +43,7 @@ jobs:
           cmakeBuildType: ${{ github.event.inputs.build_type }}
 
       - name: 打包便携版
+        shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path portable
 
@@ -58,28 +59,13 @@ jobs:
             Copy-Item -Path "www" -Destination "portable/" -Recurse -Force
           }
 
-          @"
-@echo off
-cd /d "%~dp0"
-MediaServer.exe -c config.ini
-pause
-"@ | Out-File -FilePath "portable/启动服务.bat" -Encoding ASCII
+          # 创建启动脚本
+          $batContent = "@echo off`r`ncd /d `"%~dp0`"`r`nMediaServer.exe -c config.ini`r`npause"
+          [System.IO.File]::WriteAllText("portable/启动服务.bat", $batContent, [System.Text.Encoding]::ASCII)
 
-          @"
-MediaKit 便携版
-===============
-
-启动方式:
-  双击 启动服务.bat 或运行 MediaServer.exe -c config.ini
-
-默认端口:
-  RTSP: 554
-  RTMP: 1935
-  HTTP: 80
-  HTTPS: 443
-
-配置文件: config.ini
-"@ | Out-File -FilePath "portable/README.txt" -Encoding UTF8
+          # 创建说明文件
+          $readmeContent = "MediaKit 便携版`r`n===============`r`n`r`n启动方式:`r`n  双击 启动服务.bat 或运行 MediaServer.exe -c config.ini`r`n`r`n默认端口:`r`n  RTSP: 554`r`n  RTMP: 1935`r`n  HTTP: 80`r`n  HTTPS: 443`r`n`r`n配置文件: config.ini"
+          [System.IO.File]::WriteAllText("portable/README.txt", $readmeContent, [System.Text.Encoding]::UTF8)
 
           Write-Host "=== 打包内容 ==="
           Get-ChildItem -Path "portable/" | Format-Table Name, Length
