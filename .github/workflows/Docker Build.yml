@@ -1,0 +1,123 @@
+name: Docker Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: '基础镜像'
+        required: true
+        default: 'ubuntu:22.04'
+        type: choice
+        options:
+          - ubuntu:22.04
+          - rockylinux:8
+          - debian:12
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 下载 submodule 源码
+        run: |
+          mv -f .gitmodules_github .gitmodules
+          git submodule sync
+          git submodule update --init
+
+      - name: 下载 usrsctp
+        uses: actions/checkout@v4
+        with:
+          repository: sctplab/usrsctp
+          fetch-depth: 1
+          ref: 0.9.5.0
+          path: 3rdpart/usrsctp
+
+      - name: 创建 Dockerfile
+        run: |
+          cat > Dockerfile << 'EOF'
+          ARG BASE_IMAGE=ubuntu:22.04
+          FROM ${BASE_IMAGE} AS builder
+
+          # 安装编译依赖
+          RUN if command -v apt-get > /dev/null; then \
+                apt-get update && apt-get install -y git gcc g++ make cmake libssl-dev libsrtp2-dev; \
+              elif command -v dnf > /dev/null; then \
+                dnf install -y git gcc gcc-c++ make cmake openssl-devel libsrtp-devel; \
+              elif command -v yum > /dev/null; then \
+                yum install -y git gcc gcc-c++ make cmake openssl-devel; \
+              fi
+
+          WORKDIR /build
+          COPY . .
+
+          # 编译 usrsctp
+          RUN cd 3rdpart/usrsctp && mkdir -p build && cd build && \
+              cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON .. && \
+              make -j$(nproc) && make install
+
+          # 编译 ZLMediaKit
+          RUN mkdir -p build && cd build && \
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DENABLE_WEBRTC=ON \
+                -DENABLE_SRT=ON \
+                -DENABLE_OPENSSL=ON \
+                -DENABLE_API=ON \
+                -DENABLE_SERVER=ON \
+                -DENABLE_PLAYER=OFF \
+                -DENABLE_TESTS=OFF && \
+              make -j$(nproc)
+
+          # 运行时镜像
+          FROM ${BASE_IMAGE}
+
+          # 安装运行时依赖
+          RUN if command -v apt-get > /dev/null; then \
+                apt-get update && apt-get install -y libssl3 && rm -rf /var/lib/apt/lists/*; \
+              elif command -v dnf > /dev/null; then \
+                dnf install -y openssl && dnf clean all; \
+              elif command -v yum > /dev/null; then \
+                yum install -y openssl && yum clean all; \
+              fi
+
+          WORKDIR /opt/mediakit
+
+          # 从构建阶段复制文件
+          COPY --from=builder /build/release/linux/Release/MediaServer ./
+          COPY --from=builder /build/release/linux/Release/libmk_api.so ./
+          COPY --from=builder /build/release/linux/Release/config.ini ./
+          COPY --from=builder /build/release/linux/Release/default.pem ./
+          COPY --from=builder /build/release/linux/Release/www ./www
+
+          # 暴露端口
+          EXPOSE 80 443 554 1935 8000 8554 9000 10000
+
+          # 启动命令
+          CMD ["./MediaServer", "-c", "config.ini"]
+          EOF
+
+      - name: 构建 Docker 镜像
+        run: |
+          docker build \
+            --build-arg BASE_IMAGE=${{ github.event.inputs.base_image }} \
+            -t mediakit:latest \
+            .
+
+      - name: 导出镜像
+        run: |
+          docker save mediakit:latest | gzip > mediakit-docker.tar.gz
+          ls -lh mediakit-docker.tar.gz
+
+      - name: 设置环境变量
+        run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: 上传 Docker 镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaKit_Docker_${{ env.DATE }}
+          path: mediakit-docker.tar.gz
+          if-no-files-found: error
+          retention-days: 90
