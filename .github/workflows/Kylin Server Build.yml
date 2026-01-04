@@ -53,10 +53,15 @@ jobs:
       - name: 在 CentOS 容器中编译（兼容麒麟服务器版）
         run: |
           docker pull rockylinux:8
-          docker run -v $(pwd):/root -w /root --rm rockylinux:8 sh -c "
-            set -x
+          docker run -v $(pwd):/root -w /root --rm rockylinux:8 bash -c "
+            set -ex
 
-            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel zlib-static
+            dnf install -y epel-release
+            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel perl
+
+            # 验证安装
+            which gcc cmake make
+            gcc --version
 
             mkdir -p /root/install
 
