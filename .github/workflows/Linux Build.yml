@@ -64,37 +64,23 @@ jobs:
       - name: 整理产物
         run: |
           mkdir -p dist
-
-          # 查找实际输出目录
           RELEASE_DIR=$(dirname $(find release -name "MediaServer" -type f | head -1))
           echo "找到输出目录: $RELEASE_DIR"
-
-          # 只复制需要的文件
           cp "$RELEASE_DIR/MediaServer" dist/
           cp "$RELEASE_DIR/libmk_api.so" dist/ 2>/dev/null || true
           cp "$RELEASE_DIR/config.ini" dist/ 2>/dev/null || true
           cp "$RELEASE_DIR/default.pem" dist/ 2>/dev/null || true
-
-          # 复制 www 目录
-          if [ -d "$RELEASE_DIR/www" ]; then
-            cp -r "$RELEASE_DIR/www" dist/
-          fi
-
-          # 创建启动脚本
-          cat > dist/start.sh << 'EOF'
-#!/bin/bash
-cd "$(dirname "$0")"
-./MediaServer -c config.ini
-EOF
+          if [ -d "$RELEASE_DIR/www" ]; then cp -r "$RELEASE_DIR/www" dist/; fi
+          echo '#!/bin/bash' > dist/start.sh
+          echo 'cd "$(dirname "$0")"' >> dist/start.sh
+          echo './MediaServer -c config.ini' >> dist/start.sh
           chmod +x dist/start.sh
           chmod +x dist/MediaServer
-
           echo "=== 打包内容 ==="
           ls -la dist/
 
       - name: 设置环境变量
-        run: |
-          echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+        run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
