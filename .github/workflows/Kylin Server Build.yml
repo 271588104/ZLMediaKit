@@ -93,7 +93,8 @@ jobs:
               -DENABLE_API=ON \
               -DENABLE_SERVER=ON \
               -DENABLE_PLAYER=OFF \
-              -DENABLE_TESTS=OFF
+              -DENABLE_TESTS=OFF \
+              -DENABLE_OBJCOPY=OFF
             make -j\$(nproc)
           "
 
