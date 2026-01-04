@@ -1,0 +1,62 @@
+
+  name: My Windows Build
+
+  # 手动触发，sync fork 不会自动运行
+  on:
+    workflow_dispatch:
+      inputs:
+        build_type:
+          description: '构建类型'
+          required: true
+          default: 'Release'
+          type: choice
+          options:
+            - Release
+            - Debug
+
+  jobs:
+    build:
+      runs-on: windows-2022
+
+      steps:
+        - name: 检出代码
+          uses: actions/checkout@v4
+
+        - name: 下载 submodule 源码
+          run: |
+            mv -Force .gitmodules_github .gitmodules
+            git submodule sync
+            git submodule update --init
+
+        - name: 配置 vcpkg
+          uses: lukka/run-vcpkg@v11
+          with:
+            vcpkgDirectory: '${{github.workspace}}/vcpkg'
+            vcpkgGitCommitId: 'efcfaaf60d7ec57a159fc3110403d939bfb69729'
+
+        - name: 安装依赖
+          run: |
+            cd vcpkg
+            ./vcpkg install openssl:x64-windows-static libsrtp[openssl]:x64-windows-static usrsctp:x64-windows-static
+
+        - name: 编译项目
+          uses: lukka/run-cmake@v10
+          with:
+            configurePreset: 'ninja-multi-vcpkg'
+            configurePresetAdditionalArgs: "['-DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }}', '-DENABLE_WEBRTC=ON', '-DENABLE_SRT=ON', '-DENABLE_OPENSSL=ON', '-DENABLE_API=ON', '-DENABLE_SERVER=ON']"
+            buildPreset: 'ninja-multi-vcpkg'
+            buildPresetAdditionalArgs: "['--config', '${{ github.event.inputs.build_type }}']"
+
+        - name: 设置环境变量
+          run: |
+            $dateString = Get-Date -Format "yyyy-MM-dd"
+            echo "DATE=$dateString" >> $env:GITHUB_ENV
+
+        - name: 上传构建产物
+          uses: actions/upload-artifact@v4
+          with:
+            name: ZLMediaKit_Windows_${{ github.event.inputs.build_type }}_${{ env.DATE }}
+            path: |
+              release/*
+            if-no-files-found: warn
+            retention-days: 90
