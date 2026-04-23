@@ -80,6 +80,7 @@ jobs:
 
           # 编译 libsrtp
           RUN cd 3rdpart/libsrtp && \
+              export CFLAGS="${CFLAGS:-} -fcommon" && \
               if [ ! -f configure ]; then ./autogen.sh; fi && \
               ./configure \
                 --prefix=${STAGING_DIR} \
