@@ -15,6 +15,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    env:
+      STAGING_DIR: ${{ github.workspace }}/_staging
 
     steps:
       - name: 检出代码
@@ -29,7 +31,31 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libssl-dev libsrtp2-dev
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            cmake \
+            git \
+            libtool \
+            perl \
+            pkg-config
+
+      - name: 下载 OpenSSL
+        uses: actions/checkout@v4
+        with:
+          repository: openssl/openssl
+          fetch-depth: 1
+          ref: OpenSSL_1_1_1w
+          path: 3rdpart/openssl
+
+      - name: 下载 libsrtp
+        uses: actions/checkout@v4
+        with:
+          repository: cisco/libsrtp
+          fetch-depth: 1
+          ref: v2.3.0
+          path: 3rdpart/libsrtp
 
       - name: 下载 usrsctp
         uses: actions/checkout@v4
@@ -39,27 +65,84 @@ jobs:
           ref: 0.9.5.0
           path: 3rdpart/usrsctp
 
+      - name: 编译 OpenSSL
+        run: |
+          rm -rf "$STAGING_DIR"
+          mkdir -p "$STAGING_DIR"
+          cd 3rdpart/openssl
+          ./Configure linux-x86_64 no-shared no-tests --prefix="$STAGING_DIR"
+          make -j"$(nproc)"
+          make install_sw
+
+      - name: 编译 libsrtp
+        run: |
+          cd 3rdpart/libsrtp
+          if [ ! -f configure ]; then
+            ./autogen.sh
+          fi
+          ./configure \
+            --prefix="$STAGING_DIR" \
+            --enable-openssl \
+            --with-openssl-dir="$STAGING_DIR" \
+            --enable-static \
+            --disable-shared
+          make -j"$(nproc)"
+          make install
+
       - name: 编译 usrsctp
         run: |
           cd 3rdpart/usrsctp
+          rm -rf build
           mkdir build && cd build
-          cmake -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -DCMAKE_POSITION_INDEPENDENT_CODE=ON ..
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DCMAKE_INSTALL_PREFIX="$STAGING_DIR" \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DBUILD_SHARED_LIBS=OFF
           make -j$(nproc)
-          sudo make install
+          make install
 
       - name: 编译项目
         run: |
           mkdir -p build && cd build
           cmake .. \
             -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
+            -DCMAKE_PREFIX_PATH="$STAGING_DIR" \
+            -DCMAKE_INSTALL_PREFIX="$STAGING_DIR" \
+            -DCMAKE_INCLUDE_PATH="$STAGING_DIR/include" \
+            -DCMAKE_LIBRARY_PATH="$STAGING_DIR/lib" \
+            -DOPENSSL_ROOT_DIR="$STAGING_DIR" \
+            -DOPENSSL_USE_STATIC_LIBS=ON \
+            -DOPENSSL_SSL_LIBRARY="$STAGING_DIR/lib/libssl.a" \
+            -DOPENSSL_CRYPTO_LIBRARY="$STAGING_DIR/lib/libcrypto.a" \
+            -DSRTP_PREFIX="$STAGING_DIR" \
+            -DSRTP_INCLUDE_DIRS="$STAGING_DIR/include" \
+            -DSRTP_LIBRARIES="$STAGING_DIR/lib/libsrtp2.a" \
+            -DSCTP_INCLUDE_DIRS="$STAGING_DIR/include" \
+            -DSCTP_LIBRARIES="$STAGING_DIR/lib/libusrsctp.a" \
+            -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++" \
             -DENABLE_WEBRTC=ON \
             -DENABLE_SRT=ON \
             -DENABLE_OPENSSL=ON \
             -DENABLE_API=ON \
+            -DENABLE_API_STATIC_LIB=ON \
             -DENABLE_SERVER=ON \
             -DENABLE_PLAYER=OFF \
             -DENABLE_TESTS=OFF
           make -j$(nproc)
+
+      - name: 校验运行时依赖
+        run: |
+          RELEASE_DIR=$(dirname "$(find release -name "MediaServer" -type f | head -1)")
+          ldd "$RELEASE_DIR/MediaServer" | tee /tmp/mediakit-ldd.txt
+          if grep -q "not found" /tmp/mediakit-ldd.txt; then
+            echo "存在未解析的动态依赖"
+            exit 1
+          fi
+          if grep -Eq 'lib(ssl|crypto|srtp|usrsctp|stdc\+\+|gcc_s)\.so' /tmp/mediakit-ldd.txt; then
+            echo "仍存在需要静态化的关键动态依赖"
+            exit 1
+          fi
 
       - name: 整理产物
         run: |
@@ -67,17 +150,31 @@ jobs:
           RELEASE_DIR=$(dirname $(find release -name "MediaServer" -type f | head -1))
           echo "找到输出目录: $RELEASE_DIR"
           cp "$RELEASE_DIR/MediaServer" dist/
-          cp "$RELEASE_DIR/libmk_api.so" dist/ 2>/dev/null || true
+          cp "$RELEASE_DIR/libmk_api.a" dist/ 2>/dev/null || true
           cp "$RELEASE_DIR/config.ini" dist/ 2>/dev/null || true
           cp "$RELEASE_DIR/default.pem" dist/ 2>/dev/null || true
           if [ -d "$RELEASE_DIR/www" ]; then cp -r "$RELEASE_DIR/www" dist/; fi
-          echo '#!/bin/bash' > dist/start.sh
-          echo 'cd "$(dirname "$0")"' >> dist/start.sh
-          echo './MediaServer -c config.ini' >> dist/start.sh
+          mkdir -p dist/lib
+          ldd "$RELEASE_DIR/MediaServer" | tee dist/ldd.txt
+          while IFS= read -r lib; do
+            cp -L "$lib" dist/lib/
+          done < <(awk '/=>/ && $3 ~ /^\// { print $3 }' dist/ldd.txt | grep "^$STAGING_DIR/" || true)
+          if [ -z "$(ls -A dist/lib 2>/dev/null)" ]; then
+            rmdir dist/lib
+          fi
+          cat > dist/start.sh <<'EOF'
+          #!/bin/bash
+          set -e
+          cd "$(dirname "$0")"
+          if [ -d "./lib" ]; then
+            export LD_LIBRARY_PATH="$(pwd)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          fi
+          exec ./MediaServer -c config.ini
+          EOF
           chmod +x dist/start.sh
           chmod +x dist/MediaServer
           echo "=== 打包内容 ==="
-          ls -la dist/
+          find dist -maxdepth 2 -print | sort
 
       - name: 设置环境变量
         run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV

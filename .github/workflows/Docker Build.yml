@@ -27,6 +27,22 @@ jobs:
           git submodule sync
           git submodule update --init
 
+      - name: 下载 OpenSSL
+        uses: actions/checkout@v4
+        with:
+          repository: openssl/openssl
+          fetch-depth: 1
+          ref: OpenSSL_1_1_1w
+          path: 3rdpart/openssl
+
+      - name: 下载 libsrtp
+        uses: actions/checkout@v4
+        with:
+          repository: cisco/libsrtp
+          fetch-depth: 1
+          ref: v2.3.0
+          path: 3rdpart/libsrtp
+
       - name: 下载 usrsctp
         uses: actions/checkout@v4
         with:
@@ -40,57 +56,103 @@ jobs:
           cat > Dockerfile << 'EOF'
           ARG BASE_IMAGE=ubuntu:22.04
           FROM ${BASE_IMAGE} AS builder
+          ARG BUILD_TYPE=Release
+          ENV STAGING_DIR=/opt/staging
 
           # 安装编译依赖
           RUN if command -v apt-get > /dev/null; then \
-                apt-get update && apt-get install -y git gcc g++ make cmake libssl-dev libsrtp2-dev; \
+                apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git gcc g++ make cmake perl autoconf automake libtool ca-certificates pkg-config; \
               elif command -v dnf > /dev/null; then \
-                dnf install -y git gcc gcc-c++ make cmake openssl-devel libsrtp-devel; \
+                dnf install -y git gcc gcc-c++ make cmake perl-core autoconf automake libtool ca-certificates findutils pkgconfig; \
               elif command -v yum > /dev/null; then \
-                yum install -y git gcc gcc-c++ make cmake openssl-devel; \
+                yum install -y git gcc gcc-c++ make cmake perl autoconf automake libtool ca-certificates findutils pkgconfig; \
               fi
 
           WORKDIR /build
           COPY . .
 
+          # 编译 OpenSSL
+          RUN mkdir -p ${STAGING_DIR} && \
+              cd 3rdpart/openssl && \
+              ./Configure linux-x86_64 no-shared no-tests --prefix=${STAGING_DIR} && \
+              make -j$(nproc) && \
+              make install_sw
+
+          # 编译 libsrtp
+          RUN cd 3rdpart/libsrtp && \
+              if [ ! -f configure ]; then ./autogen.sh; fi && \
+              ./configure \
+                --prefix=${STAGING_DIR} \
+                --enable-openssl \
+                --with-openssl-dir=${STAGING_DIR} \
+                --enable-static \
+                --disable-shared && \
+              make -j$(nproc) && \
+              make install
+
           # 编译 usrsctp
           RUN cd 3rdpart/usrsctp && mkdir -p build && cd build && \
-              cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON .. && \
-              make -j$(nproc) && make install
+              cmake .. \
+                -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                -DCMAKE_INSTALL_PREFIX=${STAGING_DIR} \
+                -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+                -DBUILD_SHARED_LIBS=OFF && \
+              make -j$(nproc) && \
+              make install
 
           # 编译 ZLMediaKit
           RUN mkdir -p build && cd build && \
               cmake .. \
-                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+                -DCMAKE_PREFIX_PATH=${STAGING_DIR} \
+                -DCMAKE_INSTALL_PREFIX=${STAGING_DIR} \
+                -DCMAKE_INCLUDE_PATH=${STAGING_DIR}/include \
+                -DCMAKE_LIBRARY_PATH=${STAGING_DIR}/lib \
+                -DOPENSSL_ROOT_DIR=${STAGING_DIR} \
+                -DOPENSSL_USE_STATIC_LIBS=ON \
+                -DOPENSSL_SSL_LIBRARY=${STAGING_DIR}/lib/libssl.a \
+                -DOPENSSL_CRYPTO_LIBRARY=${STAGING_DIR}/lib/libcrypto.a \
+                -DSRTP_PREFIX=${STAGING_DIR} \
+                -DSRTP_INCLUDE_DIRS=${STAGING_DIR}/include \
+                -DSRTP_LIBRARIES=${STAGING_DIR}/lib/libsrtp2.a \
+                -DSCTP_INCLUDE_DIRS=${STAGING_DIR}/include \
+                -DSCTP_LIBRARIES=${STAGING_DIR}/lib/libusrsctp.a \
+                -DCMAKE_EXE_LINKER_FLAGS='-static-libgcc -static-libstdc++' \
                 -DENABLE_WEBRTC=ON \
                 -DENABLE_SRT=ON \
                 -DENABLE_OPENSSL=ON \
                 -DENABLE_API=ON \
+                -DENABLE_API_STATIC_LIB=ON \
                 -DENABLE_SERVER=ON \
                 -DENABLE_PLAYER=OFF \
                 -DENABLE_TESTS=OFF && \
               make -j$(nproc)
 
+          # 校验关键依赖已经被静态化
+          RUN ldd /build/release/linux/${BUILD_TYPE}/MediaServer | tee /tmp/mediakit-ldd.txt && \
+              ! grep -q 'not found' /tmp/mediakit-ldd.txt && \
+              ! grep -Eq 'lib(ssl|crypto|srtp|usrsctp|stdc\+\+|gcc_s)\.so' /tmp/mediakit-ldd.txt
+
           # 运行时镜像
           FROM ${BASE_IMAGE}
+          ARG BUILD_TYPE=Release
 
           # 安装运行时依赖
           RUN if command -v apt-get > /dev/null; then \
-                apt-get update && apt-get install -y libssl3 && rm -rf /var/lib/apt/lists/*; \
+                apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*; \
               elif command -v dnf > /dev/null; then \
-                dnf install -y openssl && dnf clean all; \
+                dnf install -y ca-certificates && dnf clean all; \
               elif command -v yum > /dev/null; then \
-                yum install -y openssl && yum clean all; \
+                yum install -y ca-certificates && yum clean all; \
               fi
 
           WORKDIR /opt/mediakit
 
           # 从构建阶段复制文件
-          COPY --from=builder /build/release/linux/Release/MediaServer ./
-          COPY --from=builder /build/release/linux/Release/libmk_api.so ./
-          COPY --from=builder /build/release/linux/Release/config.ini ./
-          COPY --from=builder /build/release/linux/Release/default.pem ./
-          COPY --from=builder /build/release/linux/Release/www ./www
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/MediaServer ./
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/config.ini ./
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/default.pem ./
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/www ./www
 
           # 暴露端口
           EXPOSE 80 443 554 1935 8000 8554 9000 10000
@@ -103,8 +165,17 @@ jobs:
         run: |
           docker build \
             --build-arg BASE_IMAGE=${{ github.event.inputs.base_image }} \
+            --build-arg BUILD_TYPE=Release \
             -t mediakit:latest \
             .
+
+      - name: 校验容器运行时依赖
+        run: |
+          docker run --rm --entrypoint /bin/sh mediakit:latest -c "
+            ldd ./MediaServer | tee /tmp/mediakit-ldd.txt && \
+            ! grep -q 'not found' /tmp/mediakit-ldd.txt && \
+            ! grep -Eq 'lib(ssl|crypto|srtp|usrsctp|stdc\\+\\+|gcc_s)\\.so' /tmp/mediakit-ldd.txt
+          "
 
       - name: 导出镜像
         run: |
