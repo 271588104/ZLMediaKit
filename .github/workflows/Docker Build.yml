@@ -149,17 +149,24 @@ jobs:
 
           WORKDIR /opt/mediakit
 
+          RUN mkdir -p \
+                /opt/mediakit/config \
+                /opt/mediakit/log \
+                /opt/mediakit/ffmpeg \
+                /opt/mediakit/www \
+                /opt/mediakit/cert
+
           # 从构建阶段复制文件
           COPY --from=builder /build/release/linux/${BUILD_TYPE}/MediaServer ./
-          COPY --from=builder /build/release/linux/${BUILD_TYPE}/config.ini ./
-          COPY --from=builder /build/release/linux/${BUILD_TYPE}/default.pem ./
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/config.ini ./config/config.ini
+          COPY --from=builder /build/release/linux/${BUILD_TYPE}/default.pem ./cert/default.pem
           COPY --from=builder /build/release/linux/${BUILD_TYPE}/www ./www
 
           # 暴露端口
           EXPOSE 80 443 554 1935 8000 8554 9000 10000
 
-          # 启动命令
-          CMD ["./MediaServer", "-c", "config.ini"]
+          ENTRYPOINT ["./MediaServer"]
+          CMD ["-c", "/opt/mediakit/config/config.ini", "--log-dir", "/opt/mediakit/log", "-s", "/opt/mediakit/cert/default.pem"]
           EOF
 
       - name: 构建 Docker 镜像
