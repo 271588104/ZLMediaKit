@@ -195,7 +195,7 @@ public:
         _fps = fps;
     }
 
-    VideoTrackImp(CodecId codec_id) { 
+    VideoTrackImp(CodecId codec_id) {
         _codec_id = codec_id;
         _fps = 30;
     }
@@ -203,6 +203,7 @@ public:
     int getVideoWidth() const override { return _width; }
     int getVideoHeight() const override { return _height; }
     float getVideoFps() const override { return _fps; }
+    void setVideoFps(float fps) { _fps = fps; }
     bool ready() const override { return _width > 0 && _height > 0; }
 
     Track::Ptr clone() const override { return std::make_shared<VideoTrackImp>(*this); }
