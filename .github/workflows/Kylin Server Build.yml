@@ -15,6 +15,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      BUILD_TYPE: ${{ inputs.build_type }}
 
     steps:
       - name: 检出代码
@@ -24,7 +27,7 @@ jobs:
         run: |
           mv -f .gitmodules_github .gitmodules
           git submodule sync
-          git submodule update --init
+          git submodule update --init --recursive
 
       - name: 下载 libsrtp
         uses: actions/checkout@v4
@@ -39,7 +42,7 @@ jobs:
         with:
           repository: openssl/openssl
           fetch-depth: 1
-          ref: OpenSSL_1_1_1
+          ref: OpenSSL_1_1_1w
           path: 3rdpart/openssl
 
       - name: 下载 usrsctp
@@ -50,79 +53,12 @@ jobs:
           ref: 0.9.5.0
           path: 3rdpart/usrsctp
 
-      - name: 在 CentOS 容器中编译（兼容麒麟服务器版）
+      - name: 在 glibc 2.28 容器中编译并打包
         run: |
-          docker pull rockylinux:8
-          docker run -v $(pwd):/root -w /root --rm rockylinux:8 bash -c "
-            set -ex
-
-            dnf install -y epel-release
-            dnf install -y git wget gcc gcc-c++ make cmake openssl-devel zlib-devel perl
-
-            # 验证安装
-            gcc --version
-            cmake --version
-
-            mkdir -p /root/install
-
-            # 编译 OpenSSL
-            cd /root/3rdpart/openssl
-            ./config no-shared --prefix=/root/install
-            make -j\$(nproc)
-            make install
-            cd /root
-
-            # 编译 usrsctp
-            cd /root/3rdpart/usrsctp
-            mkdir -p build && cd build
-            cmake -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} -DCMAKE_POSITION_INDEPENDENT_CODE=ON ..
-            make -j\$(nproc)
-            make install
-            cd /root
-
-            # 编译 libsrtp
-            cd /root/3rdpart/libsrtp
-            ./configure --enable-openssl --with-openssl-dir=/root/install
-            make -j\$(nproc)
-            make install
-            cd /root
-
-            # 编译 ZLMediaKit
-            rm -rf build && mkdir -p build && cd build
-            cmake .. \
-              -DOPENSSL_ROOT_DIR=/root/install \
-              -DOPENSSL_USE_STATIC_LIBS=ON \
-              -DZLIB_LIBRARY=/usr/lib64/libz.so \
-              -DZLIB_INCLUDE_DIR=/usr/include \
-              -DCMAKE_BUILD_TYPE=${{ github.event.inputs.build_type }} \
-              -DENABLE_WEBRTC=ON \
-              -DENABLE_SRT=ON \
-              -DENABLE_OPENSSL=ON \
-              -DENABLE_API=ON \
-              -DENABLE_SERVER=ON \
-              -DENABLE_PLAYER=OFF \
-              -DENABLE_TESTS=OFF \
-              -DENABLE_OBJCOPY=OFF
-            make -j\$(nproc) || make VERBOSE=1
-          "
-
-      - name: 整理产物
-        run: |
-          mkdir -p dist
-          RELEASE_DIR=$(dirname $(find release -name "MediaServer" -type f | head -1))
-          echo "找到输出目录: $RELEASE_DIR"
-          cp "$RELEASE_DIR/MediaServer" dist/
-          cp "$RELEASE_DIR/libmk_api.so" dist/ 2>/dev/null || true
-          cp "$RELEASE_DIR/config.ini" dist/ 2>/dev/null || true
-          cp "$RELEASE_DIR/default.pem" dist/ 2>/dev/null || true
-          if [ -d "$RELEASE_DIR/www" ]; then cp -r "$RELEASE_DIR/www" dist/; fi
-          echo '#!/bin/bash' > dist/start.sh
-          echo 'cd "$(dirname "$0")"' >> dist/start.sh
-          echo './MediaServer -c config.ini' >> dist/start.sh
-          chmod +x dist/start.sh
-          chmod +x dist/MediaServer
-          echo "=== 打包内容 ==="
-          ls -la dist/
+          docker pull --platform linux/amd64 rockylinux:8
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/work" -w /work -e BUILD_TYPE \
+            rockylinux:8 bash package/build_kylin.sh
 
       - name: 设置环境变量
         run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
@@ -130,7 +66,9 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MediaKit_KylinServer_${{ github.event.inputs.build_type }}_${{ env.DATE }}
-          path: dist/*
+          name: MediaKit_KylinV10_x86_64_${{ inputs.build_type }}_${{ env.DATE }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 90
