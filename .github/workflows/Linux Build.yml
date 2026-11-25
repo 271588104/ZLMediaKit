@@ -3,6 +3,15 @@ name: Linux Build
 on:
   workflow_dispatch:
     inputs:
+      distribution:
+        description: 'Linux 发行版'
+        required: true
+        default: 'ubuntu-22.04'
+        type: choice
+        options:
+          - ubuntu-22.04
+          - centos-7
+          - kylin-v10
       build_type:
         description: '构建类型'
         required: true
@@ -13,13 +22,16 @@ on:
           - Debug
 
 jobs:
-  build:
+  ubuntu:
+    name: Ubuntu 22.04 x86_64
+    if: inputs.distribution == 'ubuntu-22.04'
     runs-on: ubuntu-22.04
     env:
       STAGING_DIR: ${{ github.workspace }}/_staging
 
     steps:
-      - name: 检出代码
+      - &checkout_source
+        name: 检出代码
         uses: actions/checkout@v4
 
       - name: 下载 submodule 源码
@@ -41,7 +53,8 @@ jobs:
             perl \
             pkg-config
 
-      - name: 下载 OpenSSL
+      - &checkout_openssl
+        name: 下载 OpenSSL
         uses: actions/checkout@v4
         with:
           repository: openssl/openssl
@@ -49,7 +62,8 @@ jobs:
           ref: OpenSSL_1_1_1w
           path: 3rdpart/openssl
 
-      - name: 下载 libsrtp
+      - &checkout_libsrtp
+        name: 下载 libsrtp
         uses: actions/checkout@v4
         with:
           repository: cisco/libsrtp
@@ -57,7 +71,8 @@ jobs:
           ref: v2.3.0
           path: 3rdpart/libsrtp
 
-      - name: 下载 usrsctp
+      - &checkout_usrsctp
+        name: 下载 usrsctp
         uses: actions/checkout@v4
         with:
           repository: sctplab/usrsctp
@@ -183,7 +198,110 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: MediaKit_Linux_${{ github.event.inputs.build_type }}_${{ env.DATE }}
+          name: MediaKit_Ubuntu22.04_x86_64_${{ github.event.inputs.build_type }}_${{ env.DATE }}
           path: dist/*
+          if-no-files-found: error
+          retention-days: 90
+
+  centos:
+    name: CentOS 7 x86_64
+    if: inputs.distribution == 'centos-7'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      BUILD_TYPE: ${{ inputs.build_type }}
+
+    steps:
+      - *checkout_source
+
+      - &checkout_recursive_submodules
+        name: 下载 submodule 源码
+        run: |
+          mv -f .gitmodules_github .gitmodules
+          git submodule sync
+          git submodule update --init --recursive
+
+      - *checkout_libsrtp
+
+      - *checkout_openssl
+
+      - *checkout_usrsctp
+
+      - name: 在 CentOS 7 构建镜像中编译并打包
+        # manylinux2014 基于 CentOS 7，提供较新的编译器和 glibc 2.17。
+        run: |
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/work" -w /work -e BUILD_TYPE \
+            quay.io/pypa/manylinux2014_x86_64 bash -euo pipefail -c '
+              export PATH="/opt/python/cp311-cp311/bin:$PATH"
+              python3 -m pip install --disable-pip-version-check cmake==3.29.5
+              exec bash package/build_linux_x86_64.sh centos7
+            '
+
+      - name: 在 CentOS 7 运行镜像中校验启动
+        run: |
+          archive="MediaKit_CentOS7_x86_64_${BUILD_TYPE}.tar.gz"
+          runtime_dir=$(mktemp -d)
+          (
+            cd dist
+            sha256sum -c "$archive.sha256"
+            tar -xzf "$archive" -C "$runtime_dir"
+          )
+          docker run --rm --platform linux/amd64 \
+            -v "$runtime_dir/MediaKit_CentOS7_x86_64:/mediakit" -w /mediakit \
+            centos:7 bash -euo pipefail -c '
+              test "$(getconf GNU_LIBC_VERSION)" = "glibc 2.17"
+              timeout 15 ./start.sh --version
+            '
+
+      - name: 设置环境变量
+        run: echo "DATE=$(date +%Y-%m-%d)" >> "$GITHUB_ENV"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaKit_CentOS7_x86_64_${{ inputs.build_type }}_${{ env.DATE }}
+          path: |
+            dist/MediaKit_CentOS7_x86_64_${{ inputs.build_type }}.tar.gz
+            dist/MediaKit_CentOS7_x86_64_${{ inputs.build_type }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  kylin:
+    name: Kylin V10 x86_64
+    if: inputs.distribution == 'kylin-v10'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    env:
+      BUILD_TYPE: ${{ inputs.build_type }}
+
+    steps:
+      - *checkout_source
+
+      - *checkout_recursive_submodules
+
+      - *checkout_libsrtp
+
+      - *checkout_openssl
+
+      - *checkout_usrsctp
+
+      - name: 在 glibc 2.28 容器中编译并打包
+        run: |
+          docker pull --platform linux/amd64 rockylinux:8
+          docker run --rm --platform linux/amd64 \
+            -v "$PWD:/work" -w /work -e BUILD_TYPE \
+            rockylinux:8 bash package/build_kylin.sh
+
+      - name: 设置环境变量
+        run: echo "DATE=$(date +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: MediaKit_KylinV10_x86_64_${{ inputs.build_type }}_${{ env.DATE }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
           if-no-files-found: error
           retention-days: 90
