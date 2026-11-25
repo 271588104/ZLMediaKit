@@ -17,7 +17,12 @@ def validate_reports(header, dynamic, versions, dependencies, max_glibc=(2, 28))
         errors.append("Expected an x86_64 ELF64 binary")
 
     needed = set(re.findall(r"\(NEEDED\).*\[([^\]]+)\]", dynamic))
-    resolved = set(re.findall(r"^\s*(\S+)\s+=>", dependencies, re.MULTILINE))
+    ldd_entries = re.findall(r"^[ \t]*(\S+)[ \t]+=>[ \t]*(.*)$", dependencies, re.MULTILINE)
+    # CentOS 7 ldd prints an arrow before the kernel-provided vDSO address.
+    resolved = {
+        library for library, target in ldd_entries
+        if library != "linux-vdso.so.1" or not re.fullmatch(r"\(0x[0-9a-fA-F]+\)\s*", target)
+    }
     for library in sorted((needed | resolved) - GLIBC_LIBRARIES):
         errors.append("External runtime dependency: " + library)
     if "libc.so.6" not in needed or "libc.so.6" not in resolved:
